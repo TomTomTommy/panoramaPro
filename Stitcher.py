@@ -2,118 +2,131 @@ import numpy as np
 import imutils
 import cv2
 
-
+# 特徴点をとり、画像を結合させるクラス
 class Stitcher:
+
+    # コンストラクタ
     def __init__(self):
-        # determine if we are using OpenCV v3.X
+        # opencvのバージョン確認
         self.isv3 = imutils.is_cv3()
 
-    def stitch(self, images, ratio=0.75, reprojThresh=4.0, showMatches=False):
-        # unpack the images, then detect keypoints and extract
-        # local invariant descriptors from them
+
+    # 特徴量を調べ、画像を結合するメソッド
+    def stitch(self, images, ratio=0.75, reprojThresh=4.0):
+
+        # ローカル変数の設定
         (imageB, imageA) = images
+
+        # それぞれの画像におけるキーポイントの座標と特徴量記述子を求める
         (kpsA, featuresA) = self.detectAndDescribe(imageA)
         (kpsB, featuresB) = self.detectAndDescribe(imageB)
 
-        # match features between the two images
-        M = self.matchKeypoints(kpsA, kpsB,
-                                featuresA, featuresB, ratio, reprojThresh)
+        # キーポイントのマッチング
+        M = self.matchKeypoints(kpsA, kpsB, featuresA, featuresB, ratio, reprojThresh)
 
-        # if the match is None, then there aren't enough matched
-        # keypoints to create a panorama
+        # マッチが弱かった時はNULLを返して終わりにする
         if M is None:
             return None
-        # otherwise, apply a perspective warp to stitch the images
-        # together
+
+        # ローカル変数の設定
         (matches, H, status) = M
-        result = cv2.warpPerspective(imageA, H, (imageA.shape[1] + imageB.shape[1], imageA.shape[0]))
+        # アウトプット画像の生成：射影変換を行う
+        result = cv2.warpPerspective(imageA, H, (imageA.shape[1] + imageB.shape[1], imageB.shape[0]))
+        # アウトプット画像にImageBを代入
         result[0:imageB.shape[0], 0:imageB.shape[1]] = imageB
 
-        # check to see if the keypoint matches should be visualized
-        if showMatches:
-            vis = self.drawMatches(imageA, imageB, kpsA, kpsB, matches, status)
+        # マッチ画像の生成
+        vis = self.drawMatches(imageA, imageB, kpsA, kpsB, matches, status)
 
-            # return a tuple of the stitched image and the
-            # visualization
-            return (result, vis)
+        # マッチ画像とアウトプット画像を返す
+        return (result, vis)
 
-        # return the stitched image
-        return result
 
+    # キーポイントを調べるメソッド
     def detectAndDescribe(self, image):
-        # convert the image to grayscale
+
+        # グレースケールに変換
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # check to see if we are using OpenCV 3.X
+        # OpenCV3系列なら以下の処理を行う
         if self.isv3:
-            # detect and extract features from the image
-            descriptor = cv2.xfeatures2d.SIFT_create()
-            (kps, features) = descriptor.detectAndCompute(image, None)
+            # ORB検出器を作る
+            descriptor = cv2.ORB_create()
+            # ORBでキーポイントと特徴記述子を求める
+            (kps, features) = descriptor.detectAnCompute(image, None)
 
-        # otherwise, we are using OpenCV 2.4.X
+        # OpenCV2系列なら以下の処理
         else:
-            # detect keypoints in the image
-            detector = cv2.FeatureDetector_create("SIFT")
+            # ORB検出器を作る
+            detector = cv2.ORB_create()
+            # ORBでキーポイントを計算
             kps = detector.detect(gray)
-
-            # extract features from the image
-            extractor = cv2.DescriptorExtractor_create("SIFT")
+            # ORB検出器を作る
+            extractor = cv2.ORB_create()
+            # ORBでキーポイントと特徴記述子を求める
             (kps, features) = extractor.compute(gray, kps)
 
-        # convert the keypoints from KeyPoint objects to NumPy
-        # arrays
+        # キーポイントの座標をNumPy配列に入れ直す
         kps = np.float32([kp.pt for kp in kps])
 
-        # return a tuple of keypoints and features
+        # キーポイントと特徴量を返す
         return (kps, features)
 
+
+    # キーポイントをマッチングさせるメソッド
     def matchKeypoints(self, kpsA, kpsB, featuresA, featuresB, ratio, reprojThresh):
-        # compute the raw matches and initialize the list of actual
-        # matches
+
+        # 2つの画像の特徴量を計算するクラスの作成
         matcher = cv2.DescriptorMatcher_create("BruteForce")
+        # 各特徴点に対して、上位2個のマッチング結果をrawMatchesに代入
         rawMatches = matcher.knnMatch(featuresA, featuresB, 2)
+        # 変数の初期化
         matches = []
 
-        # loop over the raw matches
+        # D.Loweが提唱したRatio Testで、マッチング結果を間引いて保存する
         for m in rawMatches:
-            # ensure the distance is within a certain ratio of each
-            # other (i.e. Lowe's ratio test)
+            # 近い二つの特徴点が存在する際に、より大きい方の特徴点（m[1].distance）の距離を少し小さくしても、
+            # 小さい方の特徴点の距離(m[0].distance)が小さければ採択する
             if len(m) == 2 and m[0].distance < m[1].distance * ratio:
                 matches.append((m[0].trainIdx, m[0].queryIdx))
-        # computing a homography requires at least 4 matches
+
+        # 4つ以上のマッチングが見つかった場合はホモグラフィ行列を見つける
         if len(matches) > 4:
-            # construct the two sets of points
+            # マッチングした座標の保存
             ptsA = np.float32([kpsA[i] for (_, i) in matches])
             ptsB = np.float32([kpsB[i] for (i, _) in matches])
 
             # compute the homography between the two sets of points
-            (H, status) = cv2.findHomography(ptsA, ptsB, cv2.RANSAC,
-                                             reprojThresh)
+            (H, status) = cv2.findHomography(ptsA, ptsB, cv2.RANSAC, reprojThresh)
 
             # return the matches along with the homograpy matrix
             # and status of each matched point
             return (matches, H, status)
 
-        # otherwise, no homograpy could be computed
+        # 4つ以上のマッチング点がない場合はホモグラフィ変換できないためNoneを返す
         return None
 
+
+    # マッチした点同士を結んだ画像を作る
     def drawMatches(self, imageA, imageB, kpsA, kpsB, matches, status):
-        # initialize the output visualization image
+
+        # 入力画像のサイズを算出
         (hA, wA) = imageA.shape[:2]
         (hB, wB) = imageB.shape[:2]
+
+        # 縦幅のより大きい方の数値と、横幅の和をサイズにした３チャネルの画像を生成
         vis = np.zeros((max(hA, hB), wA + wB, 3), dtype="uint8")
+
+        # アウトプット画像にimageAとimaageBを並べる
         vis[0:hA, 0:wA] = imageA
         vis[0:hB, wA:] = imageB
 
-        # loop over the matches
         for ((trainIdx, queryIdx), s) in zip(matches, status):
-            # only process the match if the keypoint was successfully
-            # matched
+            # matchのステータスが1ならば線を引く
             if s == 1:
-                # draw the match
                 ptA = (int(kpsA[queryIdx][0]), int(kpsA[queryIdx][1]))
                 ptB = (int(kpsB[trainIdx][0]) + wA, int(kpsB[trainIdx][1]))
                 cv2.line(vis, ptA, ptB, (0, 255, 0), 1)
 
-        # return the visualization
+        # マッチ画像を返す
         return vis
