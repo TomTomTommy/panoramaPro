@@ -96,11 +96,11 @@ class Stitcher:
             ptsA = np.float32([kpsA[i] for (_, i) in matches])
             ptsB = np.float32([kpsB[i] for (i, _) in matches])
 
-            # compute the homography between the two sets of points
+            # ホモグラフィ行列とマッチした点のステータスを保存
+            # ステータスは{0,1}で表され、1の点は使用された点で，0の点は使用されていない点
             (H, status) = cv2.findHomography(ptsA, ptsB, cv2.RANSAC, reprojThresh)
 
-            # return the matches along with the homograpy matrix
-            # and status of each matched point
+            # マッチした点とホモグラフィ行列、そのステータスを返す
             return (matches, H, status)
 
         # 4つ以上のマッチング点がない場合はホモグラフィ変換できないためNoneを返す
